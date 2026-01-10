@@ -8,7 +8,6 @@ import aiosqlite
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from dotenv import load_dotenv
 
@@ -20,7 +19,7 @@ if not TOKEN:
     print("ERROR: BOT_TOKEN not set!")
     exit(1)
 
-# Render предоставляет эти переменные автоматически
+# Render переменные (автоматически доступны)
 WEBHOOK_HOST = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -113,39 +112,27 @@ async def handle_text(message: Message):
     success, resp = await save_workout(message.from_user.id, message.text)
     await message.answer(resp)
 
-async def on_startup(bot: Bot):
+async def main():
     await init_db()
+    print("Бот запущен!")
+
+    # Установка webhook
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(url=WEBHOOK_URL)
-    print(f"Webhook установлен: {WEBHOOK_URL}")
+    print(f"Webhook установлен на: {WEBHOOK_URL}")
 
-async def on_shutdown(bot: Bot):
-    await bot.session.close()
-    print("Бот остановлен")
-
-async def main():
     # Запуск aiohttp сервера
     app = web.Application()
-    webhook_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-    )
-    webhook_handler.register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
-
+    app.router.add_post(WEBHOOK_PATH, lambda request: dp.feed_webhook_update(bot, request))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
 
     print(f"Сервер запущен на порту {PORT}")
-    await on_startup(bot)
 
     # Держим процесс живым
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Бот остановлен пользователем")
+    asyncio.run(main())
