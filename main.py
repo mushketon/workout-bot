@@ -8,6 +8,8 @@ import aiosqlite
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,6 +19,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     print("ERROR: BOT_TOKEN not set!")
     exit(1)
+
+# Render предоставляет эти переменные автоматически
+WEBHOOK_HOST = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+PORT = int(os.getenv("PORT", 10000))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -44,7 +53,6 @@ def parse_line(line: str):
     if not line:
         return None
 
-    # Пример: "жим лежа 3x8 75" или "присед 4x10 90кг" или "подтягивания 5xmax"
     match = re.match(r'^([а-яa-zё\s\-]+?)\s*(?:(\d+)\s*[xх]\s*([\d\-]+|max|до\s*отказа))?\s*([\d,.]+)?\s*(кг|kg|к)?$', line)
     if match:
         exercise = match.group(1).strip().title()
@@ -105,10 +113,39 @@ async def handle_text(message: Message):
     success, resp = await save_workout(message.from_user.id, message.text)
     await message.answer(resp)
 
-async def main():
+async def on_startup(bot: Bot):
     await init_db()
-    print("Бот запущен!")
-    await dp.start_polling(bot)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Webhook установлен: {WEBHOOK_URL}")
+
+async def on_shutdown(bot: Bot):
+    await bot.session.close()
+    print("Бот остановлен")
+
+async def main():
+    # Запуск aiohttp сервера
+    app = web.Application()
+    webhook_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+    )
+    webhook_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+
+    print(f"Сервер запущен на порту {PORT}")
+    await on_startup(bot)
+
+    # Держим процесс живым
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Бот остановлен пользователем")
